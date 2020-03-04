@@ -14,11 +14,12 @@
 #define mesh_x1 2
 #define mesh_v0 -2
 #define mesh_v1 2
-#define Nt 10
+#define Nt 100
 #define n_mc_steps 100
 #define h 1.
 #define sigma 0.1
-#define subcyles 12
+#define subcycles 12
+#define hsubsycle (h/subcycles)
 
 std::default_random_engine generator;
 std::normal_distribution<double> distribution(0., 1.);
@@ -54,10 +55,10 @@ void initMeshProbabilities(double *mesh, double *Xs, double *Vs) {
 
 
 void particleStepForward(double x0, double v0, double *x, double *v) {
-    for (int i = 0; i < subcyles; ++i) {
+    for (int i = 0; i < subcycles; ++i) {
         // hamiltonian push
-        *x = x0 * (1 - h*h) + h * v0;
-        *v = v0 - h * x0;
+        *x = x0 * (1 - hsubsycle*hsubsycle) + hsubsycle * v0;
+        *v = v0 - hsubsycle * x0;
     }
 
     // update v with maryama euler
@@ -73,15 +74,15 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
     } else if (x > mesh_x1) {
         ix = Nm - 1;
     } else {
-        ix = fmod(x - mesh_x0, (mesh_x1 - mesh_x0) / double(Nm));
+        ix = (x - mesh_x0) / (mesh_x1 - mesh_x0) * double(Nm);
     }
 
     if (v < mesh_v0) {
         iv = 0;
-    } else if (v < mesh_v1) {
+    } else if (v > mesh_v1) {
         iv = Nm - 1;
     } else {
-        iv = fmod(v - mesh_v0, (mesh_v1 - mesh_v0) / Nm);
+        iv = (v - mesh_v0) / (mesh_v1 - mesh_v0) * double(Nm);
     }
 
     double lengths[2][2];
@@ -106,6 +107,11 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
 
 void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, double *Xs, double *Vs) {
     for (int i = 0; i < Nm2; ++i) {
+
+        // erase the mesh helper tmp
+        for (int j = 0; j < Nm2; ++j)
+            meshTmp[j] = 0.;
+
         if (indexInOmega(i, Xs, Vs)) {
             // particle already on omega, set phi to 1
             mesh1[i] = 1;
@@ -116,6 +122,10 @@ void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, dou
         mesh1[i] = 0;
         for (int j = 0; j < n_mc_steps; ++j) {
             particleStepForward(Xs[i], Vs[i], &x, &v);
+            // if (i == 900) {
+            //     printf("%f %f %f %f\n", Xs[i], Vs[i], x, v);
+            // }
+            // printf("%f %f %f %f\n", Xs[i], Vs[i], x, v);
             particleMeshDeposit(meshTmp, x, v, Xs, Vs);
         }
 
@@ -129,6 +139,9 @@ void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, dou
 }
 
 int main() {
+
+    FILE *out = fopen("out.txt", "w");
+    fprintf(out, "\n");
 
     // init mesh
     double *Xs = (double*)malloc(sizeof(double) * Nm2);
@@ -150,6 +163,14 @@ int main() {
     } 
 
     // TODO write to file
+    printf("Writing to file\n");
+    int ix, iv;
+    for (int i=0; i < Nm2; ++i) {
+        ix = i % Nm;
+        iv = i / Nm;
+
+        fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, mesh0[i]);
+    }
 
     return 0;
 }
