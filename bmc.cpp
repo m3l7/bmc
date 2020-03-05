@@ -6,7 +6,7 @@
 #include <time.h>
 #include <stdbool.h>
 #include <random>
-// #include <omp.h>
+#include <omp.h>
 
 #define Nm 128 // number of points in each dimension
 #define Nm2 (Nm*Nm)
@@ -108,7 +108,8 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
     meshTmp[mesh_i_bl + 1 + Nm] += lengths[1][1] / tot_length;
 }
 
-void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, double *Xs, double *Vs, int mpiID, int mpiNP) {
+void computeMeshProbabilities(double *mesh0, double *mesh1, double *Xs, double *Vs, int mpiID, int mpiNP) {
+    #pragma omp parallel for schedule(static, 1)
     for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
 
         if (indexInOmega(i, Xs, Vs)) {
@@ -116,6 +117,8 @@ void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, dou
             mesh1[i] = 1;
             continue;
         }
+
+        double *meshTmp = (double*)malloc(sizeof(double) * Nm2);
 
         // erase the mesh helper tmp
         for (int j = 0; j < Nm2; ++j)
@@ -133,6 +136,8 @@ void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, dou
         for (int j = 0; j < Nm2; ++j) {
             mesh1[i] += meshTmp[j] / n_mc_steps * mesh0[j];
         }
+
+        free(meshTmp);
     }
 
 }
@@ -155,7 +160,6 @@ int main(int argc, char **argv) {
     double *Vs = (double*)malloc(sizeof(double) * Nm2);
     double *mesh0 = (double*)malloc(sizeof(double) * Nm2);
     double *mesh1 = (double*)malloc(sizeof(double) * Nm2);
-    double *mesh_tmp = (double*)malloc(sizeof(double) * Nm2);
     double *mesh_shift;
 
     initMeshIndexes(Xs, Vs);
@@ -167,7 +171,7 @@ int main(int argc, char **argv) {
         if (mpiID == 0) {
             printf("timestep %i\n", t);
         }
-        computeMeshProbabilities(mesh0, mesh1, mesh_tmp, Xs, Vs, mpiID, mpiNP);
+        computeMeshProbabilities(mesh0, mesh1, Xs, Vs, mpiID, mpiNP);
 
         // sync & shift meshes
         MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
@@ -188,7 +192,6 @@ int main(int argc, char **argv) {
     	
     free(mesh1);
 	free(mesh0);
-	free(mesh_tmp);
 	free(Xs);
 	free(Vs);
 
