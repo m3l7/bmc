@@ -68,7 +68,9 @@ void particleStepForward(double x0, double v0, double *x, double *v) {
     *v += sigma * sqrt(h) * distribution(generator);
 }
 
-void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double *Vs) {
+double particleMeshDeposit(double *mesh0, double x, double v, double *Xs, double *Vs) {
+
+    double ret = 0;
 
     // find lower left vertex of the simplex including the point
     int ix, iv;
@@ -90,9 +92,10 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
 
     double lengths[2][2];
     double tot_length = 0;
+    int mesh_i_bl = ix + Nm * iv;
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
-            int mesh_i = ix + i + Nm * (j + iv);
+            int mesh_i = mesh_i_bl + i + Nm*j;
             double dx = Xs[mesh_i] - x;
             double dv = Vs[mesh_i] - v;
             lengths[i][j] = sqrt(dx*dx + dv*dv);
@@ -101,11 +104,12 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
     }
 
     // distribute the particle to the vertices of the simplex based on the distance from them
-    int mesh_i_bl = ix + Nm * iv;
-    meshTmp[mesh_i_bl] += lengths[0][0] / tot_length;
-    meshTmp[mesh_i_bl + 1] += lengths[0][1] / tot_length;
-    meshTmp[mesh_i_bl + Nm] += lengths[1][0] / tot_length;
-    meshTmp[mesh_i_bl + 1 + Nm] += lengths[1][1] / tot_length;
+    ret += mesh0[mesh_i_bl] * lengths[0][0];
+    ret += mesh0[mesh_i_bl + 1] * lengths[0][1];
+    ret += mesh0[mesh_i_bl + Nm] * lengths[1][0];
+    ret += mesh0[mesh_i_bl + 1 + Nm] * lengths[1][1];
+
+    return ret / tot_length;
 }
 
 void computeMeshProbabilities(double *mesh0, double *mesh1, double *Xs, double *Vs, int mpiID, int mpiNP) {
@@ -118,28 +122,14 @@ void computeMeshProbabilities(double *mesh0, double *mesh1, double *Xs, double *
             continue;
         }
 
-        double *meshTmp = (double*)malloc(sizeof(double) * Nm2);
-
-        // erase the mesh helper tmp
-        for (int j = 0; j < Nm2; ++j)
-            meshTmp[j] = 0.;
-
         double x, v;
         mesh1[i] = 0;
         for (int j = 0; j < n_mc_steps; ++j) {
             particleStepForward(Xs[i], Vs[i], &x, &v);
-            particleMeshDeposit(meshTmp, x, v, Xs, Vs);
+            mesh1[i] += particleMeshDeposit(mesh0, x, v, Xs, Vs);
         }
-
-        // normalize mesh and multiply by previous timestep mesh
-        // then sum all elements and save to new mesh1
-        for (int j = 0; j < Nm2; ++j) {
-            mesh1[i] += meshTmp[j] / n_mc_steps * mesh0[j];
-        }
-
-        free(meshTmp);
+        mesh1[i] /= n_mc_steps;
     }
-
 }
 
 int main(int argc, char **argv) {
@@ -148,7 +138,7 @@ int main(int argc, char **argv) {
     fprintf(out, "\n");
 
     int mpierr = MPI_Init(&argc, &argv);
-    int mpiID, mpiNP;
+    int mpiID = 0, mpiNP = 1;
 
     mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
     mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
@@ -175,6 +165,9 @@ int main(int argc, char **argv) {
 
         // sync & shift meshes
         MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+
+        // no MPI version
+        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
     } 
 
     // TODO write to file
