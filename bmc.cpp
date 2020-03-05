@@ -8,12 +8,12 @@
 #include <random>
 // #include <omp.h>
 
-#define Nm 50 // number of points in each dimension
+#define Nm 100 // number of points in each dimension
 #define Nm2 (Nm*Nm)
-#define mesh_x0 -2
-#define mesh_x1 2
-#define mesh_v0 -2
-#define mesh_v1 2
+#define mesh_x0 -2.
+#define mesh_x1 2.
+#define mesh_v0 -2.
+#define mesh_v1 2.
 #define Nt 100
 #define n_mc_steps 100
 #define h 1.
@@ -55,6 +55,9 @@ void initMeshProbabilities(double *mesh, double *Xs, double *Vs) {
 
 
 void particleStepForward(double x0, double v0, double *x, double *v) {
+    // FIXME: Fix the random number generator
+    // std::random_device rd{};
+    // std::mt19937 gen{rd()};
     for (int i = 0; i < subcycles; ++i) {
         // hamiltonian push
         *x = x0 * (1 - hsubsycle*hsubsycle) + hsubsycle * v0;
@@ -72,17 +75,17 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
     if (x < mesh_x0) {
         ix = 0;
     } else if (x > mesh_x1) {
-        ix = Nm - 1;
+        ix = Nm - 2;
     } else {
-        ix = (x - mesh_x0) / (mesh_x1 - mesh_x0) * double(Nm);
+        ix = (x - mesh_x0) / (mesh_x1 - mesh_x0) * double(Nm - 1);
     }
 
     if (v < mesh_v0) {
         iv = 0;
     } else if (v > mesh_v1) {
-        iv = Nm - 1;
+        iv = Nm - 2;
     } else {
-        iv = (v - mesh_v0) / (mesh_v1 - mesh_v0) * double(Nm);
+        iv = (v - mesh_v0) / (mesh_v1 - mesh_v0) * double(Nm - 1);
     }
 
     double lengths[2][2];
@@ -108,31 +111,36 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
 void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, double *Xs, double *Vs) {
     for (int i = 0; i < Nm2; ++i) {
 
-        // erase the mesh helper tmp
-        for (int j = 0; j < Nm2; ++j)
-            meshTmp[j] = 0.;
-
         if (indexInOmega(i, Xs, Vs)) {
             // particle already on omega, set phi to 1
             mesh1[i] = 1;
             continue;
         }
 
+        // erase the mesh helper tmp
+        for (int j = 0; j < Nm2; ++j)
+            meshTmp[j] = 0.;
+
         double x, v;
         mesh1[i] = 0;
         for (int j = 0; j < n_mc_steps; ++j) {
             particleStepForward(Xs[i], Vs[i], &x, &v);
-            // if (i == 900) {
+            // if (i == 1399) {
             //     printf("%f %f %f %f\n", Xs[i], Vs[i], x, v);
             // }
-            // printf("%f %f %f %f\n", Xs[i], Vs[i], x, v);
             particleMeshDeposit(meshTmp, x, v, Xs, Vs);
+            // if (i == 1399) {
+            //     printf("mc %i %f\n", j, meshTmp[1150]);
+            // }
         }
 
         // normalize mesh and multiply by previous timestep mesh
         // then sum all elements and save to new mesh1
         for (int j = 0; j < Nm2; ++j) {
             mesh1[i] += meshTmp[j] / n_mc_steps * mesh0[j];
+            // if (i == 1399) {
+            //     printf("%i %f\n", j, mesh1[i]);
+            // }
         }
     }
 
@@ -142,6 +150,8 @@ int main() {
 
     FILE *out = fopen("out.txt", "w");
     fprintf(out, "\n");
+
+    srand(time(NULL));
 
     // init mesh
     double *Xs = (double*)malloc(sizeof(double) * Nm2);
