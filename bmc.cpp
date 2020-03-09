@@ -105,8 +105,8 @@ double particleMeshDeposit(double *mesh0, double x, double v, double *Xs, double
 
     // distribute the particle to the vertices of the simplex based on the distance from them
     ret += mesh0[mesh_i_bl] * lengths[0][0];
-    ret += mesh0[mesh_i_bl + 1] * lengths[0][1];
-    ret += mesh0[mesh_i_bl + Nm] * lengths[1][0];
+    ret += mesh0[mesh_i_bl + 1] * lengths[1][0];
+    ret += mesh0[mesh_i_bl + Nm] * lengths[0][1];
     ret += mesh0[mesh_i_bl + 1 + Nm] * lengths[1][1];
 
     return ret / tot_length;
@@ -150,7 +150,6 @@ int main(int argc, char **argv) {
     double *Vs = (double*)malloc(sizeof(double) * Nm2);
     double *mesh0 = (double*)malloc(sizeof(double) * Nm2);
     double *mesh1 = (double*)malloc(sizeof(double) * Nm2);
-    double *mesh_shift;
 
     initMeshIndexes(Xs, Vs);
     initMeshProbabilities(mesh0, Xs, Vs);
@@ -170,7 +169,7 @@ int main(int argc, char **argv) {
         // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
     } 
 
-    // TODO write to file
+    // write to file
     if (mpiID == 0) {
         printf("Writing to file\n");
         int ix, iv;
