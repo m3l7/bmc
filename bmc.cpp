@@ -1,14 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-// #include <mpi.h>
+#include <mpi.h>
 #include <math.h>
 #include <time.h>
 #include <stdbool.h>
 #include <random>
-// #include <omp.h>
+#include <omp.h>
 
-#define Nm 100 // number of points in each dimension
+#define Nm 128 // number of points in each dimension
 #define Nm2 (Nm*Nm)
 #define mesh_x0 -2.
 #define mesh_x1 2.
@@ -68,7 +68,9 @@ void particleStepForward(double x0, double v0, double *x, double *v) {
     *v += sigma * sqrt(h) * distribution(generator);
 }
 
-void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double *Vs) {
+double particleMeshDeposit(double *mesh0, double x, double v, double *Xs, double *Vs) {
+
+    double ret = 0;
 
     // find lower left vertex of the simplex including the point
     int ix, iv;
@@ -90,9 +92,10 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
 
     double lengths[2][2];
     double tot_length = 0;
+    int mesh_i_bl = ix + Nm * iv;
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
-            int mesh_i = ix + i + Nm * (j + iv);
+            int mesh_i = mesh_i_bl + i + Nm*j;
             double dx = Xs[mesh_i] - x;
             double dv = Vs[mesh_i] - v;
             lengths[i][j] = sqrt(dx*dx + dv*dv);
@@ -101,15 +104,17 @@ void particleMeshDeposit(double *meshTmp, double x, double v, double *Xs, double
     }
 
     // distribute the particle to the vertices of the simplex based on the distance from them
-    int mesh_i_bl = ix + Nm * iv;
-    meshTmp[mesh_i_bl] += lengths[0][0] / tot_length;
-    meshTmp[mesh_i_bl + 1] += lengths[0][1] / tot_length;
-    meshTmp[mesh_i_bl + Nm] += lengths[1][0] / tot_length;
-    meshTmp[mesh_i_bl + 1 + Nm] += lengths[1][1] / tot_length;
+    ret += mesh0[mesh_i_bl] * lengths[0][0];
+    ret += mesh0[mesh_i_bl + 1] * lengths[1][0];
+    ret += mesh0[mesh_i_bl + Nm] * lengths[0][1];
+    ret += mesh0[mesh_i_bl + 1 + Nm] * lengths[1][1];
+
+    return ret / tot_length;
 }
 
-void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, double *Xs, double *Vs) {
-    for (int i = 0; i < Nm2; ++i) {
+void computeMeshProbabilities(double *mesh0, double *mesh1, double *Xs, double *Vs, int mpiID, int mpiNP) {
+    #pragma omp parallel for schedule(static, 1)
+    for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
 
         if (indexInOmega(i, Xs, Vs)) {
             // particle already on omega, set phi to 1
@@ -117,70 +122,72 @@ void computeMeshProbabilities(double *mesh0, double *mesh1, double *meshTmp, dou
             continue;
         }
 
-        // erase the mesh helper tmp
-        for (int j = 0; j < Nm2; ++j)
-            meshTmp[j] = 0.;
-
         double x, v;
         mesh1[i] = 0;
         for (int j = 0; j < n_mc_steps; ++j) {
             particleStepForward(Xs[i], Vs[i], &x, &v);
-            // if (i == 1399) {
-            //     printf("%f %f %f %f\n", Xs[i], Vs[i], x, v);
-            // }
-            particleMeshDeposit(meshTmp, x, v, Xs, Vs);
-            // if (i == 1399) {
-            //     printf("mc %i %f\n", j, meshTmp[1150]);
-            // }
+            mesh1[i] += particleMeshDeposit(mesh0, x, v, Xs, Vs);
         }
-
-        // normalize mesh and multiply by previous timestep mesh
-        // then sum all elements and save to new mesh1
-        for (int j = 0; j < Nm2; ++j) {
-            mesh1[i] += meshTmp[j] / n_mc_steps * mesh0[j];
-            // if (i == 1399) {
-            //     printf("%i %f\n", j, mesh1[i]);
-            // }
-        }
+        mesh1[i] /= n_mc_steps;
     }
-
 }
 
-int main() {
+int main(int argc, char **argv) {
 
     FILE *out = fopen("out.txt", "w");
     fprintf(out, "\n");
 
-    srand(time(NULL));
+    int mpierr = MPI_Init(&argc, &argv);
+    int mpiID = 0, mpiNP = 1;
+
+    mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
+    mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
+
+	srand(time(NULL));
 
     // init mesh
     double *Xs = (double*)malloc(sizeof(double) * Nm2);
     double *Vs = (double*)malloc(sizeof(double) * Nm2);
     double *mesh0 = (double*)malloc(sizeof(double) * Nm2);
     double *mesh1 = (double*)malloc(sizeof(double) * Nm2);
-    double *mesh_tmp = (double*)malloc(sizeof(double) * Nm2);
-    double *mesh_shift;
 
     initMeshIndexes(Xs, Vs);
     initMeshProbabilities(mesh0, Xs, Vs);
 
-    for (int t = 0; t < Nt; ++t) {
-        printf("timestep %i\n", t);
-        computeMeshProbabilities(mesh0, mesh1, mesh_tmp, Xs, Vs);
+    MPI_Barrier(MPI_COMM_WORLD);
 
-        // shift meshes
-        memcpy(mesh0, mesh1, sizeof(double)*Nm2);
+    for (int t = 0; t < Nt; ++t) {
+        if (mpiID == 0) {
+            printf("timestep %i\n", t);
+        }
+        computeMeshProbabilities(mesh0, mesh1, Xs, Vs, mpiID, mpiNP);
+
+        // sync & shift meshes
+        MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+
+        // no MPI version
+        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
     } 
 
-    // TODO write to file
-    printf("Writing to file\n");
-    int ix, iv;
-    for (int i=0; i < Nm2; ++i) {
-        ix = i % Nm;
-        iv = i / Nm;
+    // write to file
+    if (mpiID == 0) {
+        printf("Writing to file\n");
+        int ix, iv;
+        for (int i=0; i < Nm2; ++i) {
+            ix = i % Nm;
+            iv = i / Nm;
 
-        fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, mesh0[i]);
+            fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, mesh0[i]);
+        }
     }
+
+    	
+    free(mesh1);
+	free(mesh0);
+	free(Xs);
+	free(Vs);
+
+    mpierr = MPI_Finalize();
 
     return 0;
 }
