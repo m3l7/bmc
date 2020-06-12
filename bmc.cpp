@@ -24,7 +24,13 @@
 std::default_random_engine generator;
 std::normal_distribution<double> distribution(0., 1.);
 
-void initMeshIndexes(double *Xs, double *Vs) {
+/** Init phase space (x-v) linspace for the rectangular mesh
+ *  The mesh is defined as [mesh_x0, mesh_x1] X [mesh_v0, mesh_v1]
+ * 
+ * @param  {double*} Xs : X output linspace
+ * @param  {double*} Vs : V output linspace
+ */
+void initMeshLinSpace(double *Xs, double *Vs) {
     double x, y;
     int ix;
     for (int i = 0; i < Nm2; ++i) {
@@ -33,6 +39,14 @@ void initMeshIndexes(double *Xs, double *Vs) {
     }
 }
 
+/**
+ *  Check if point i is inside the target domain Omega
+ *  Omega is set to be at x = mesh_x0 and v \in [-0.5, 0]
+ * @param  {int} i      : 
+ * @param  {double*} Xs : 
+ * @param  {double*} Vs : 
+ * @return {bool}       : 
+ */
 bool indexInOmega(int i, double *Xs, double *Vs) {
     if ((i % Nm == 0) && (Vs[i] >= -0.5) && (Vs[i] <= 0)) {
         return true;
@@ -41,19 +55,31 @@ bool indexInOmega(int i, double *Xs, double *Vs) {
     }
 }
 
-// initialize the probabilities with the indicator function of omega
-void initMeshProbabilities(double *mesh, double *Xs, double *Vs) {
+/**
+ * initialize the probabilities with the indicator function of omega
+ *
+ * @param  {double*} meshP : output probabilities for the mesh
+ * @param  {double*} Xs   : 
+ * @param  {double*} Vs   : 
+ */
+void initMeshProbabilities(double *meshP, double *Xs, double *Vs) {
     for (int i = 0; i < Nm2; ++i) {
         if (indexInOmega(i, Xs, Vs)) {
-            mesh[i] = 1.;
+            meshP[i] = 1.;
         } else {
-            mesh[i] = 0.;
+            meshP[i] = 0.;
         }
     }
 }
 
 
-
+/**
+ * Advance the particle in time using symplectic Euler with subcycles
+ * @param  {double} x0 : 
+ * @param  {double} v0 : 
+ * @param  {double*} x : 
+ * @param  {double*} v : 
+ */
 void particleStepForward(double x0, double v0, double *x, double *v) {
     // FIXME: Fix the random number generator
     // std::random_device rd{};
@@ -68,7 +94,17 @@ void particleStepForward(double x0, double v0, double *x, double *v) {
     *v += sigma * sqrt(h) * distribution(generator);
 }
 
-double particleMeshDeposit(double *mesh0, double x, double v, double *Xs, double *Vs) {
+/**
+ * Deposit a particle, with continuous coordinates, into the mesh
+ * and compute the Phi function contribution of the particle (eq. 21 - Hirvijoki 2019)
+ * @param  {double*} meshP0 : Mesh probabilities of the previous time step
+ * @param  {double} x      : Particle x position
+ * @param  {double} v      : Particle v position
+ * @param  {double*} Xs    : X linspace
+ * @param  {double*} Vs    : V linspace
+ * @return {double}        : Phi contribution of the particle (eq. 21)
+ */
+double particlePhiContribution(double *meshP0, double x, double v, double *Xs, double *Vs) {
 
     double ret = 0;
 
@@ -89,10 +125,10 @@ double particleMeshDeposit(double *mesh0, double x, double v, double *Xs, double
     } else {
         iv = (v - mesh_v0) / (mesh_v1 - mesh_v0) * double(Nm - 1);
     }
+    int mesh_i_bl = ix + Nm * iv;
 
     double lengths[2][2];
     double tot_length = 0;
-    int mesh_i_bl = ix + Nm * iv;
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
             int mesh_i = mesh_i_bl + i + Nm*j;
@@ -104,31 +140,39 @@ double particleMeshDeposit(double *mesh0, double x, double v, double *Xs, double
     }
 
     // distribute the particle to the vertices of the simplex based on the distance from them
-    ret += mesh0[mesh_i_bl] * lengths[0][0];
-    ret += mesh0[mesh_i_bl + 1] * lengths[1][0];
-    ret += mesh0[mesh_i_bl + Nm] * lengths[0][1];
-    ret += mesh0[mesh_i_bl + 1 + Nm] * lengths[1][1];
+    ret += meshP0[mesh_i_bl] * lengths[0][0];
+    ret += meshP0[mesh_i_bl + 1] * lengths[1][0];
+    ret += meshP0[mesh_i_bl + Nm] * lengths[0][1];
+    ret += meshP0[mesh_i_bl + 1 + Nm] * lengths[1][1];
 
     return ret / tot_length;
 }
-
-void computeMeshProbabilities(double *mesh0, double *mesh1, double *Xs, double *Vs, int mpiID, int mpiNP) {
+/**
+ * Compute mesh probabilities, starting from the mesh probabilities of the previous time step
+ * @param  {double*} meshP0 : Mesh probabilities of the previous timestep
+ * @param  {double*} meshP1 : Output mesh probabilities of the current timestep
+ * @param  {double*} Xs    : X linspace
+ * @param  {double*} Vs    : V linspace
+ * @param  {int} mpiID     :
+ * @param  {int} mpiNP     : 
+ */
+void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double *Vs, int mpiID, int mpiNP) {
     #pragma omp parallel for schedule(static, 1)
     for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
 
         if (indexInOmega(i, Xs, Vs)) {
-            // particle already on omega, set phi to 1
-            mesh1[i] = 1;
+            // particle already in target space Omega, set phi to 1
+            meshP1[i] = 1;
             continue;
         }
 
         double x, v;
-        mesh1[i] = 0;
+        meshP1[i] = 0;
         for (int j = 0; j < n_mc_steps; ++j) {
             particleStepForward(Xs[i], Vs[i], &x, &v);
-            mesh1[i] += particleMeshDeposit(mesh0, x, v, Xs, Vs);
+            meshP1[i] += particlePhiContribution(meshP0, x, v, Xs, Vs);
         }
-        mesh1[i] /= n_mc_steps;
+        meshP1[i] /= n_mc_steps;
     }
 }
 
@@ -145,13 +189,14 @@ int main(int argc, char **argv) {
 
 	srand(time(NULL));
 
-    // init mesh
+    // init linspaces and mesh probabilities
+    // we only need to store the probabilities for 2 consecutive time steps
     double *Xs = (double*)malloc(sizeof(double) * Nm2);
     double *Vs = (double*)malloc(sizeof(double) * Nm2);
     double *mesh0 = (double*)malloc(sizeof(double) * Nm2);
     double *mesh1 = (double*)malloc(sizeof(double) * Nm2);
 
-    initMeshIndexes(Xs, Vs);
+    initMeshLinSpace(Xs, Vs);
     initMeshProbabilities(mesh0, Xs, Vs);
 
     MPI_Barrier(MPI_COMM_WORLD);
