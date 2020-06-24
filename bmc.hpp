@@ -9,7 +9,13 @@
 #include <stdbool.h>
 #include <random>
 #include <omp.h>
+#include "hermite_rule.hpp"
 
+struct HermiteParams {
+    double* knots;
+    double* weights;
+    int order;
+};
 struct Segment {
     int p0;
     int p1;
@@ -22,7 +28,7 @@ struct Point
 };
 
 int main(int argc,char **argv);
-void computeMeshProbabilities(double *meshP0,double *meshP1,double *Xs,double *Vs,Segment *targetSegments,int nTargetSegments,int mpiID,int mpiNP);
+void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double *Vs, Segment *targetSegments, int nTargetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP);
 double particlePhiContribution(double *meshP0,double x,double v,double *Xs,double *Vs);
 void particleStepForward(double x0,double v0,double *x,double *v);
 void initMeshProbabilities(double *meshP,double *Xs,double *Vs);
