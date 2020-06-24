@@ -1,8 +1,9 @@
 # CC=g++
 CC=mpiCC
 CFLAGS=-fopenmp -O3 -lm
+DEPS = bmc.hpp
 
-%.o: %.cpp
+%.o: %.cpp $(DEPS)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 bmc: bmc.o

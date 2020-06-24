@@ -1,13 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <mpi.h>
-#include <math.h>
-#include <time.h>
-#include <stdbool.h>
-#include <random>
-#include <omp.h>
-// #include "hermite_rule.hpp"
+#include "bmc.hpp"
 
 #define Nm 128 // number of points in each dimension
 #define Nm2 (Nm*Nm)
@@ -24,17 +15,6 @@
 
 std::default_random_engine generator;
 std::normal_distribution<double> distribution(0., 1.);
-
-struct Segment {
-    int p0;
-    int p1;
-};
-
-struct Point 
-{ 
-    double x; 
-    double v; 
-};
 
 // Given three colinear points p, q, r, the function checks if 
 // point q lies on line segment 'pr' 
