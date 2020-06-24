@@ -1,20 +1,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-// #include <mpi.h>
+#include <mpi.h>
 #include <math.h>
 #include <time.h>
 #include <stdbool.h>
 #include <random>
 #include <omp.h>
+// #include "hermite_rule.hpp"
 
-#define Nm 64 // number of points in each dimension
+#define Nm 128 // number of points in each dimension
 #define Nm2 (Nm*Nm)
 #define mesh_x0 -2.
 #define mesh_x1 2.
 #define mesh_v0 -2.
 #define mesh_v1 2.
-#define Nt 200
+#define Nt 100
 #define n_mc_steps 100
 #define h 1.
 #define sigma 0.1
@@ -124,20 +125,32 @@ void initMeshLinSpace(double *Xs, double *Vs) {
  * @return {bool}       : 
  */
 bool vertexInTargetDomain(int i, double *Xs, double *Vs) {
-    if ((i % Nm == 0) && (Vs[i/Nm] >= -0.5) && (Vs[i/Nm] <= 0)) {
+    double v = Vs[i/Nm];
+    double x = Xs[i&Nm];
+    
+    if ((i % Nm == 0) && (v >= -0.5) && (v <= 0)) {
         return true;
-    } else {
-        return false;
     }
+    // if ((i/Nm == 22) && (x < -1.7)) {
+    //     return true;
+    // }
+    return false;
 }
 
 /**
  * Compute the segments of the target boundary
+ * Try to compute the target segments starting from the target points.
+ * This function is quite awkward and it will be replaced with a proper function from ASCOT
+ * A better approach would be to compute directly the segments, either by hand..
+ * ...or with some coordinate parametrization and discretization
+ * @param  {Segment**} targetSegments : output array of segments
  * @param  {double*} Xs : 
  * @param  {double*} Vs : 
  * @return {int}        : number of target segments
  */
-int computeTargetDomainSegments(Segment *targetSegments, double *Xs, double *Vs) {
+int computeTargetDomainSegments(Segment **targetSegments, double *Xs, double *Vs) {
+
+    *targetSegments = (Segment *)malloc(0);
     int ret = -1;
     int p0;
     struct Segment s;
@@ -146,8 +159,8 @@ int computeTargetDomainSegments(Segment *targetSegments, double *Xs, double *Vs)
             ret++;
             if (ret > 0) {
                 s = {p0, i};
-                targetSegments = (Segment *)realloc(targetSegments, ret * sizeof(Segment));
-                targetSegments[ret-1] = s;
+                *targetSegments = (Segment *)realloc(*targetSegments, ret * sizeof(Segment));
+                (*targetSegments)[ret-1] = s;
             }
             p0 = i;
         }
@@ -171,6 +184,17 @@ bool coordinatesOutsideBoundaries(double x, double v) {
         return true;
     }
 
+    // TEST NEW DOMAIN
+    if ((x>1.5) && (v>-0.5) && (v<0.5)) {
+        return true;
+    }
+    if ((v<-1.7) && (x>-0.5) && (x<0.5)) {
+        return true;
+    }
+    // if ((x<-1.7) && (v>-0.5) && (v<=0)) {
+    //     return true;
+    // }
+
     return false;
 }
 
@@ -182,13 +206,7 @@ bool coordinatesOutsideBoundaries(double x, double v) {
  * @return {bool}       : 
  */
 bool vertexOutsideBoundaries(int i, double *Xs, double *Vs) {
-    int ix = i % Nm;
-    int iv = i / Nm;
-    if (((ix == 0) || (ix == Nm-1)) && ((iv == 0) || (iv == Nm-1))) {
-        return true;
-    } else {
-        return false;
-    }
+    return coordinatesOutsideBoundaries(Xs[i%Nm], Vs[i/Nm]);
 }
 
 /**
@@ -205,6 +223,7 @@ bool trajectoryHitTarget(double x0, double v0, double x1, double v1, double *Xs,
     struct Point p0, p1, t0, t1;
     int t0_idx, t1_idx;
     for (int i=0; i < nTargetSegments; ++i) {
+        int u = i;
         // loop in all target domain segments and check if the trajectory hit the segment
         p0 = {x0, v0};
         p1 = {x1, v1};
@@ -288,13 +307,11 @@ double particlePhiContribution(double *meshP0, double x, double v, double *Xs, d
     int mesh_i_bl = ix + Nm * iv;
 
     // find distance of the point to each of the 4 vertices
-    double lengths[2][2];
-    double tot_length = 0;
+    double lengths[2][2], tot_length = 0, dx, dv;
     for (int i = 0; i < 2; ++i) {
         for (int j = 0; j < 2; ++j) {
-            int mesh_i = mesh_i_bl + i + Nm*j;
-            double dx = Xs[mesh_i] - x;
-            double dv = Vs[mesh_i] - v;
+            dx = Xs[ix + i] - x;
+            dv = Vs[iv + j] - v;
             lengths[i][j] = sqrt(dx*dx + dv*dv);
             tot_length += lengths[i][j];
         }
@@ -319,7 +336,7 @@ double particlePhiContribution(double *meshP0, double x, double v, double *Xs, d
  * @param  {int} mpiNP     : 
  */
 void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double *Vs, Segment *targetSegments, int nTargetSegments, int mpiID, int mpiNP) {
-    // #pragma omp parallel for schedule(static, 1)
+    #pragma omp parallel for schedule(static, 1)
     for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
 
         if (vertexInTargetDomain(i, Xs, Vs)) {
@@ -359,11 +376,11 @@ int main(int argc, char **argv) {
     FILE *out = fopen("out.txt", "w");
     fprintf(out, "\n");
 
-    // int mpierr = MPI_Init(&argc, &argv);
+    int mpierr = MPI_Init(&argc, &argv);
     int mpiID = 0, mpiNP = 1;
 
-    // mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
-    // mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
+    mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
+    mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
 
 	srand(time(NULL));
 
@@ -377,10 +394,10 @@ int main(int argc, char **argv) {
     initMeshLinSpace(Xs, Vs);
     initMeshProbabilities(mesh0, Xs, Vs);
 
-    Segment *targetSegments = (Segment *)malloc(0);
-    int nTargetSegments = computeTargetDomainSegments(targetSegments, Xs, Vs);
+    Segment *targetSegments;
+    int nTargetSegments = computeTargetDomainSegments(&targetSegments, Xs, Vs);
 
-    // MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
 
     for (int t = 0; t < Nt; ++t) {
         if (mpiID == 0) {
@@ -389,10 +406,10 @@ int main(int argc, char **argv) {
         computeMeshProbabilities(mesh0, mesh1, Xs, Vs, targetSegments, nTargetSegments, mpiID, mpiNP);
 
         // sync & shift meshes
-        // MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+        MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
 
         // no MPI version
-        memcpy(mesh0, mesh1, sizeof(double)*Nm2);
+        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
     } 
 
     // write to file
@@ -414,7 +431,7 @@ int main(int argc, char **argv) {
 	free(Xs);
 	free(Vs);
 
-    // mpierr = MPI_Finalize();
+    mpierr = MPI_Finalize();
 
     return 0;
 }
