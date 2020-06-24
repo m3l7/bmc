@@ -7,16 +7,13 @@
 #define mesh_v0 -2.
 #define mesh_v1 2.
 #define Nt 100
-#define n_mc_steps 100
 #define h 1.
 #define sigma 0.1
 #define subcycles 12
 #define hsubsycle (h/subcycles)
-#define NHermite 100
+#define NHermite 20
 #define PI2E3_2 15.7496099457
-
-std::default_random_engine generator;
-std::normal_distribution<double> distribution(0., 1.);
+#define PI2E0_5 2.50662827463
 
 int main(int argc, char **argv) {
 
@@ -28,8 +25,6 @@ int main(int argc, char **argv) {
 
     mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
     mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
-
-	srand(time(NULL));
 
     // init linspaces and mesh probabilities
     // we only need to store the probabilities for 2 consecutive time steps
@@ -421,23 +416,6 @@ void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double
             }
 
         }
-        meshP1[i] /= PI2E3_2;
-        // for (int j = 0; j < n_mc_steps; ++j) {
-        //     particleStepForward(Xs[i%Nm], Vs[i/Nm], xi, &x1, &v1);
-
-        //     if (coordinatesOutsideBoundaries(x1, v1)) {
-        //         // the particle is outside the boundary
-        //         // check if it hit the target domain or not
-        //         if (trajectoryHitTarget(Xs[i%Nm], Vs[i/Nm], x1, v1, Xs, Vs, targetSegments, nTargetSegments)) {
-        //             meshP1[i] += 1.;
-        //         }
-        //     } else {
-        //         // particle still inside the boundary.
-        //         // weight with the probability of the previous timestep
-        //         meshP1[i] += particlePhiContribution(meshP0, x1, v1, Xs, Vs);
-        //     }
-
-        // }
-        // meshP1[i] /= n_mc_steps;
+        meshP1[i] /= PI2E0_5;
     }
 }
