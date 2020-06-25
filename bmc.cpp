@@ -7,14 +7,81 @@
 #define mesh_v0 -2.
 #define mesh_v1 2.
 #define Nt 100
-#define n_mc_steps 100
 #define h 1.
 #define sigma 0.1
 #define subcycles 12
 #define hsubsycle (h/subcycles)
+#define NHermite 20
+#define PI2E3_2 15.7496099457
+#define PI2E0_5 2.50662827463
 
-std::default_random_engine generator;
-std::normal_distribution<double> distribution(0., 1.);
+int main(int argc, char **argv) {
+
+    FILE *out = fopen("out.txt", "w");
+    fprintf(out, "\n");
+
+    int mpierr = MPI_Init(&argc, &argv);
+    int mpiID = 0, mpiNP = 1;
+
+    mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
+    mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
+
+    // init linspaces and mesh probabilities
+    // we only need to store the probabilities for 2 consecutive time steps
+    double *Xs = (double*)malloc(sizeof(double) * Nm);
+    double *Vs = (double*)malloc(sizeof(double) * Nm);
+    double *mesh0 = (double*)malloc(sizeof(double) * Nm2);
+    double *mesh1 = (double*)malloc(sizeof(double) * Nm2);
+
+    initMeshLinSpace(Xs, Vs);
+    initMeshProbabilities(mesh0, Xs, Vs);
+
+    Segment *targetSegments;
+    int nTargetSegments = computeTargetDomainSegments(&targetSegments, Xs, Vs);
+
+    // compute Legendre-Hermite polynomials
+    double hermiteK[NHermite], hermiteW[NHermite];
+    cgqf(NHermite, 6, 0, 0, 0, 0.5, hermiteK, hermiteW);
+    struct HermiteParams hermiteParams = {.knots=hermiteK, .weights=hermiteW, .order=NHermite};
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    for (int t = 0; t < Nt; ++t) {
+        if (mpiID == 0) {
+            printf("timestep %i\n", t);
+        }
+        computeMeshProbabilities(mesh0, mesh1, Xs, Vs, targetSegments, nTargetSegments, hermiteParams, mpiID, mpiNP);
+
+        // sync & shift meshes
+        MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+
+        // no MPI version
+        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
+    } 
+
+    // write to file
+    if (mpiID == 0) {
+        printf("Writing to file\n");
+        int ix, iv;
+        for (int i=0; i < Nm2; ++i) {
+            ix = i % Nm;
+            iv = i / Nm;
+
+            fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, mesh0[i]);
+        }
+    }
+
+    	
+    free(mesh1);
+	free(mesh0);
+    free(targetSegments);
+	free(Xs);
+	free(Vs);
+
+    mpierr = MPI_Finalize();
+
+    return 0;
+}
 
 // Given three colinear points p, q, r, the function checks if 
 // point q lies on line segment 'pr' 
@@ -245,10 +312,11 @@ void initMeshProbabilities(double *meshP, double *Xs, double *Vs) {
  * Advance the particle in time using symplectic Euler with subcycles
  * @param  {double} x0 : 
  * @param  {double} v0 : 
+ * @param  {double} xi : 
  * @param  {double*} x : 
  * @param  {double*} v : 
  */
-void particleStepForward(double x0, double v0, double *x, double *v) {
+void particleStepForward(double x0, double v0, double xi, double *x, double *v) {
     // FIXME: Fix the random number generator
     // std::random_device rd{};
     // std::mt19937 gen{rd()};
@@ -264,7 +332,7 @@ void particleStepForward(double x0, double v0, double *x, double *v) {
     }
 
     // update v with maryama euler
-    *v += sigma * sqrt(h) * distribution(generator);
+    *v += sigma * sqrt(h) * xi;
 }
 
 /**
@@ -315,7 +383,7 @@ double particlePhiContribution(double *meshP0, double x, double v, double *Xs, d
  * @param  {int} mpiID     :
  * @param  {int} mpiNP     : 
  */
-void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double *Vs, Segment *targetSegments, int nTargetSegments, int mpiID, int mpiNP) {
+void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double *Vs, Segment *targetSegments, int nTargetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP) {
     #pragma omp parallel for schedule(static, 1)
     for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
 
@@ -331,87 +399,23 @@ void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double
 
         double x1, v1;
         meshP1[i] = 0;
-        for (int j = 0; j < n_mc_steps; ++j) {
-            particleStepForward(Xs[i%Nm], Vs[i/Nm], &x1, &v1);
+
+        for (int j = 0; j < NHermite; ++j) {
+            particleStepForward(Xs[i%Nm], Vs[i/Nm], hermiteParams.knots[j], &x1, &v1);
 
             if (coordinatesOutsideBoundaries(x1, v1)) {
                 // the particle is outside the boundary
                 // check if it hit the target domain or not
                 if (trajectoryHitTarget(Xs[i%Nm], Vs[i/Nm], x1, v1, Xs, Vs, targetSegments, nTargetSegments)) {
-                    meshP1[i] += 1.;
+                    meshP1[i] += hermiteParams.weights[j];
                 }
             } else {
                 // particle still inside the boundary.
                 // weight with the probability of the previous timestep
-                meshP1[i] += particlePhiContribution(meshP0, x1, v1, Xs, Vs);
+                meshP1[i] += particlePhiContribution(meshP0, x1, v1, Xs, Vs) * hermiteParams.weights[j];
             }
 
         }
-        meshP1[i] /= n_mc_steps;
+        meshP1[i] /= PI2E0_5;
     }
-}
-
-int main(int argc, char **argv) {
-
-    FILE *out = fopen("out.txt", "w");
-    fprintf(out, "\n");
-
-    int mpierr = MPI_Init(&argc, &argv);
-    int mpiID = 0, mpiNP = 1;
-
-    mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
-    mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
-
-	srand(time(NULL));
-
-    // init linspaces and mesh probabilities
-    // we only need to store the probabilities for 2 consecutive time steps
-    double *Xs = (double*)malloc(sizeof(double) * Nm);
-    double *Vs = (double*)malloc(sizeof(double) * Nm);
-    double *mesh0 = (double*)malloc(sizeof(double) * Nm2);
-    double *mesh1 = (double*)malloc(sizeof(double) * Nm2);
-
-    initMeshLinSpace(Xs, Vs);
-    initMeshProbabilities(mesh0, Xs, Vs);
-
-    Segment *targetSegments;
-    int nTargetSegments = computeTargetDomainSegments(&targetSegments, Xs, Vs);
-
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    for (int t = 0; t < Nt; ++t) {
-        if (mpiID == 0) {
-            printf("timestep %i\n", t);
-        }
-        computeMeshProbabilities(mesh0, mesh1, Xs, Vs, targetSegments, nTargetSegments, mpiID, mpiNP);
-
-        // sync & shift meshes
-        MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
-
-        // no MPI version
-        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
-    } 
-
-    // write to file
-    if (mpiID == 0) {
-        printf("Writing to file\n");
-        int ix, iv;
-        for (int i=0; i < Nm2; ++i) {
-            ix = i % Nm;
-            iv = i / Nm;
-
-            fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, mesh0[i]);
-        }
-    }
-
-    	
-    free(mesh1);
-	free(mesh0);
-    free(targetSegments);
-	free(Xs);
-	free(Vs);
-
-    mpierr = MPI_Finalize();
-
-    return 0;
 }
