@@ -12,10 +12,17 @@
 #define subcycles 12
 #define hsubsycle (h/subcycles)
 #define NHermite 20
+#define ForwardMCsteps 1000
 #define PI2E3_2 15.7496099457
 #define PI2E0_5 2.50662827463
+#define UseForwardMonteCarlo false
+
+std::default_random_engine generator;
+std::normal_distribution<double> distribution(0., 1.);
 
 int main(int argc, char **argv) {
+
+    srand(time(NULL));
 
     FILE *out = fopen("out.txt", "w");
     fprintf(out, "\n");
@@ -46,18 +53,12 @@ int main(int argc, char **argv) {
 
     MPI_Barrier(MPI_COMM_WORLD);
 
-    for (int t = 0; t < Nt; ++t) {
-        if (mpiID == 0) {
-            printf("timestep %i\n", t);
-        }
-        computeMeshProbabilities(mesh0, mesh1, Xs, Vs, targetSegments, nTargetSegments, hermiteParams, mpiID, mpiNP);
-
-        // sync & shift meshes
-        MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
-
-        // no MPI version
-        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
-    } 
+    // decide whether to use backward or forward
+    if (UseForwardMonteCarlo) {
+        forwardMonteCarlo(mesh0, mesh1, Xs, Vs, nTargetSegments, targetSegments, mpiID, mpiNP);
+    } else {
+        backwardMonteCarlo(mesh0, mesh1, Xs, Vs, nTargetSegments, targetSegments, hermiteParams, mpiID, mpiNP);
+    }
 
     // write to file
     if (mpiID == 0) {
@@ -81,6 +82,89 @@ int main(int argc, char **argv) {
     mpierr = MPI_Finalize();
 
     return 0;
+}
+/** Perform a backward monte carlo computation
+ *  and compute the probability mesh after the time Nt
+ * 
+ * @param  {double*} mesh0               : initial probability mesh
+ * @param  {double*} mesh1               : output probability mesh
+ * @param  {double*} Xs                  : X linspace
+ * @param  {double*} Vs                  : V linspace
+ * @param  {int} nTargetSegments         : number of target domain segments: len(targetSegments)
+ * @param  {Segment*} targetSegments     : target segments array
+ * @param  {HermiteParams} hermiteParams : Hermite integration parameters
+ * @param  {int} mpiID                   : 
+ * @param  {int} mpiNP                   : 
+ */
+void backwardMonteCarlo(double *mesh0, double *mesh1, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP) {
+    for (int t = 0; t < Nt; ++t) {
+        if (mpiID == 0) {
+            printf("timestep %i\n", t);
+        }
+        computeMeshProbabilities(mesh0, mesh1, Xs, Vs, targetSegments, nTargetSegments, hermiteParams, mpiID, mpiNP);
+
+        // sync & shift meshes
+        MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+
+        // no MPI version
+        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
+    } 
+}
+
+/** Perform a forward monte carlo computation
+ *  and compute the probability mesh after the time Nt
+ * 
+ * @param  {double*} mesh0               : initial probability mesh
+ * @param  {double*} mesh1               : output probability mesh
+ * @param  {double*} Xs                  : X linspace
+ * @param  {double*} Vs                  : V linspace
+ * @param  {int} nTargetSegments         : number of target domain segments: len(targetSegments)
+ * @param  {Segment*} targetSegments     : target segments array
+ * @param  {int} mpiID                   : 
+ * @param  {int} mpiNP                   : 
+ */
+void forwardMonteCarlo(double *mesh0, double *mesh1, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, int mpiID, int mpiNP) {
+    for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
+        mesh1[i] = 0;
+
+        if (vertexInTargetDomain(i, Xs, Vs)) {
+            // particle already in target space Omega, set phi to 1
+            mesh1[i] = 1;
+            continue;
+        } else if (vertexOutsideBoundaries(i, Xs, Vs)) {
+            // particle outside of the boundaries or lies on the boundary (but not in the target domain)
+            mesh1[i] = 0;
+            continue;
+        }
+
+        double x0, v0, xi, x1, v1;
+        for (int j = 0; j < ForwardMCsteps; ++j) {
+            x0 = Xs[i%Nm];
+            v0 = Vs[i/Nm];
+            for (int t=0; t<Nt; ++t) {
+                xi = distribution(generator);
+
+                particleStepForward(x0, v0, xi, &x1, &v1);
+
+                if (coordinatesOutsideBoundaries(x1, v1)) {
+                        // printf("lool\n");
+                    // the particle is outside the boundary
+                    // check if it hit the target domain or not
+                    if (trajectoryHitTarget(x0, v0, x1, v1, Xs, Vs, targetSegments, nTargetSegments)) {
+                        // printf("hit!\n");
+                        mesh1[i] += 1.;
+                    }
+                    break;
+                }
+
+                x0 = x1;
+                v0 = v1;
+            }
+        }
+        mesh1[i] /= ForwardMCsteps;
+    }
+
+    MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 // Given three colinear points p, q, r, the function checks if 
@@ -279,9 +363,10 @@ bool trajectoryHitTarget(double x0, double v0, double x1, double v1, double *Xs,
         t0 = {Xs[t0_idx % Nm], Vs[t0_idx / Nm]};
         t1 = {Xs[t1_idx % Nm], Vs[t1_idx / Nm]};
 
+            // printf("%f\n", ((p1.x - p0.x) * (t1.v - t0.v) - (p1.v - p0.v) * (t1.x - t0.x)));
         if (doIntersect(p0, p1, t0, t1)) {
             // check if the trajectory is entering or exiting the target domain
-            if (((p1.x - p0.x) * (t1.v - t0.v) - (p1.v - p0.v) * (t1.x - t0.x)) >= 0) {
+            if (((p1.x - p0.x) * (t1.v - t0.v) - (p1.v - p0.v) * (t1.x - t0.x)) <= 0) {
                 // exiting
                 return true;
             }
