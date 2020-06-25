@@ -1,6 +1,16 @@
 # 2D BMC
-2 Dim Backward Montecarlo scheme example
+2 dimensional Backward Monte Carlo scheme example
 
-## Compile example
+## Compile
 
-mpiCC -05 -fopenmp -lm --std=c++11 bmc.cpp
+make clean && make
+
+## Run
+
+mpiexec -n 2 bmc
+
+## TODO
+
+- Modify code and data structures according to ASCOT code
+- Generalize the code to 6D
+- Comparison with forward Monte Carlo and existing simulations
