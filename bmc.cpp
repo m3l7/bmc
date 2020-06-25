@@ -37,11 +37,11 @@ int main(int argc, char **argv) {
     // we only need to store the probabilities for 2 consecutive time steps
     double *Xs = (double*)malloc(sizeof(double) * Nm);
     double *Vs = (double*)malloc(sizeof(double) * Nm);
-    double *mesh0 = (double*)malloc(sizeof(double) * Nm2);
-    double *mesh1 = (double*)malloc(sizeof(double) * Nm2);
+    double *meshP0 = (double*)malloc(sizeof(double) * Nm2);
+    double *meshP1 = (double*)malloc(sizeof(double) * Nm2);
 
     initMeshLinSpace(Xs, Vs);
-    initMeshProbabilities(mesh0, Xs, Vs);
+    initMeshProbabilities(meshP0, Xs, Vs);
 
     Segment *targetSegments;
     int nTargetSegments = computeTargetDomainSegments(&targetSegments, Xs, Vs);
@@ -55,9 +55,9 @@ int main(int argc, char **argv) {
 
     // decide whether to use backward or forward
     if (UseForwardMonteCarlo) {
-        forwardMonteCarlo(mesh0, mesh1, Xs, Vs, nTargetSegments, targetSegments, mpiID, mpiNP);
+        forwardMonteCarlo(meshP0, meshP1, Xs, Vs, nTargetSegments, targetSegments, mpiID, mpiNP);
     } else {
-        backwardMonteCarlo(mesh0, mesh1, Xs, Vs, nTargetSegments, targetSegments, hermiteParams, mpiID, mpiNP);
+        backwardMonteCarlo(meshP0, meshP1, Xs, Vs, nTargetSegments, targetSegments, hermiteParams, mpiID, mpiNP);
     }
 
     // write to file
@@ -68,13 +68,13 @@ int main(int argc, char **argv) {
             ix = i % Nm;
             iv = i / Nm;
 
-            fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, mesh0[i]);
+            fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, meshP0[i]);
         }
     }
 
     	
-    free(mesh1);
-	free(mesh0);
+    free(meshP1);
+	free(meshP0);
     free(targetSegments);
 	free(Xs);
 	free(Vs);
@@ -86,8 +86,8 @@ int main(int argc, char **argv) {
 /** Perform a backward monte carlo computation
  *  and compute the probability mesh after the time Nt
  * 
- * @param  {double*} mesh0               : initial probability mesh
- * @param  {double*} mesh1               : output probability mesh
+ * @param  {double*} meshP0               : initial probability mesh
+ * @param  {double*} meshP1               : output probability mesh
  * @param  {double*} Xs                  : X linspace
  * @param  {double*} Vs                  : V linspace
  * @param  {int} nTargetSegments         : number of target domain segments: len(targetSegments)
@@ -96,26 +96,25 @@ int main(int argc, char **argv) {
  * @param  {int} mpiID                   : 
  * @param  {int} mpiNP                   : 
  */
-void backwardMonteCarlo(double *mesh0, double *mesh1, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP) {
+void backwardMonteCarlo(double *meshP0, double *meshP1, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP) {
     for (int t = 0; t < Nt; ++t) {
         if (mpiID == 0) {
             printf("timestep %i\n", t);
         }
-        computeMeshProbabilities(mesh0, mesh1, Xs, Vs, targetSegments, nTargetSegments, hermiteParams, mpiID, mpiNP);
+        computeMeshProbabilities(meshP0, meshP1, Xs, Vs, targetSegments, nTargetSegments, hermiteParams, mpiID, mpiNP);
 
         // sync & shift meshes
-        MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+        MPI_Allgather(&meshP1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, meshP0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
 
         // no MPI version
-        // memcpy(mesh0, mesh1, sizeof(double)*Nm2);
+        // memcpy(meshP0, meshP1, sizeof(double)*Nm2);
     } 
 }
 
 /** Perform a forward monte carlo computation
  *  and compute the probability mesh after the time Nt
  * 
- * @param  {double*} mesh0               : initial probability mesh
- * @param  {double*} mesh1               : output probability mesh
+ * @param  {double*} meshP               : output probability mesh
  * @param  {double*} Xs                  : X linspace
  * @param  {double*} Vs                  : V linspace
  * @param  {int} nTargetSegments         : number of target domain segments: len(targetSegments)
@@ -123,17 +122,17 @@ void backwardMonteCarlo(double *mesh0, double *mesh1, double *Xs, double *Vs, in
  * @param  {int} mpiID                   : 
  * @param  {int} mpiNP                   : 
  */
-void forwardMonteCarlo(double *mesh0, double *mesh1, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, int mpiID, int mpiNP) {
+void forwardMonteCarlo(double *meshP, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, int mpiID, int mpiNP) {
     for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
-        mesh1[i] = 0;
+        meshP[i] = 0;
 
         if (vertexInTargetDomain(i, Xs, Vs)) {
             // particle already in target space Omega, set phi to 1
-            mesh1[i] = 1;
+            meshP[i] = 1;
             continue;
         } else if (vertexOutsideBoundaries(i, Xs, Vs)) {
             // particle outside of the boundaries or lies on the boundary (but not in the target domain)
-            mesh1[i] = 0;
+            meshP[i] = 0;
             continue;
         }
 
@@ -152,7 +151,7 @@ void forwardMonteCarlo(double *mesh0, double *mesh1, double *Xs, double *Vs, int
                     // check if it hit the target domain or not
                     if (trajectoryHitTarget(x0, v0, x1, v1, Xs, Vs, targetSegments, nTargetSegments)) {
                         // printf("hit!\n");
-                        mesh1[i] += 1.;
+                        meshP[i] += 1.;
                     }
                     break;
                 }
@@ -161,10 +160,10 @@ void forwardMonteCarlo(double *mesh0, double *mesh1, double *Xs, double *Vs, int
                 v0 = v1;
             }
         }
-        mesh1[i] /= ForwardMCsteps;
+        meshP[i] /= ForwardMCsteps;
     }
 
-    MPI_Allgather(&mesh1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, mesh0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+    MPI_Allgather(&meshP[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, meshP, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
 }
 
 // Given three colinear points p, q, r, the function checks if 
