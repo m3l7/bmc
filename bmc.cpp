@@ -33,16 +33,14 @@ int main(int argc, char **argv) {
     mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
     mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
 
-    // init linspaces and mesh probabilities
+    // init linspaces and probability mesh
     // we only need to store the probabilities for 2 consecutive time steps
     double *Xs = (double*)malloc(sizeof(double) * Nm);
     double *Vs = (double*)malloc(sizeof(double) * Nm);
-    double *meshP0 = (double*)malloc(sizeof(double) * Nm2);
-    double *meshP1 = (double*)malloc(sizeof(double) * Nm2);
-
+    double *meshP = (double*)malloc(sizeof(double) * Nm2);
     initMeshLinSpace(Xs, Vs);
-    initMeshProbabilities(meshP0, Xs, Vs);
 
+    // Compute segments of the target domain Omega
     Segment *targetSegments;
     int nTargetSegments = computeTargetDomainSegments(&targetSegments, Xs, Vs);
 
@@ -55,9 +53,9 @@ int main(int argc, char **argv) {
 
     // decide whether to use backward or forward
     if (UseForwardMonteCarlo) {
-        forwardMonteCarlo(meshP0, meshP1, Xs, Vs, nTargetSegments, targetSegments, mpiID, mpiNP);
+        forwardMonteCarlo(meshP, Xs, Vs, nTargetSegments, targetSegments, mpiID, mpiNP);
     } else {
-        backwardMonteCarlo(meshP0, meshP1, Xs, Vs, nTargetSegments, targetSegments, hermiteParams, mpiID, mpiNP);
+        backwardMonteCarlo(meshP, Xs, Vs, nTargetSegments, targetSegments, hermiteParams, mpiID, mpiNP);
     }
 
     // write to file
@@ -68,13 +66,12 @@ int main(int argc, char **argv) {
             ix = i % Nm;
             iv = i / Nm;
 
-            fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, meshP0[i]);
+            fprintf(out, "%i\t%i\t%i\t%f\n", ix, iv, i, meshP[i]);
         }
     }
 
     	
-    free(meshP1);
-	free(meshP0);
+    free(meshP);
     free(targetSegments);
 	free(Xs);
 	free(Vs);
@@ -96,7 +93,14 @@ int main(int argc, char **argv) {
  * @param  {int} mpiID                   : 
  * @param  {int} mpiNP                   : 
  */
-void backwardMonteCarlo(double *meshP0, double *meshP1, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP) {
+void backwardMonteCarlo(double *meshP0, double *Xs, double *Vs, int nTargetSegments, Segment *targetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP) {
+
+    // we need a support mesh for storing 2 consecutive time steps
+    double *meshP1 = (double*)malloc(sizeof(double) * Nm2);
+
+    // init probability mesh
+    initMeshProbabilities(meshP0, Xs, Vs);
+
     for (int t = 0; t < Nt; ++t) {
         if (mpiID == 0) {
             printf("timestep %i\n", t);
@@ -109,6 +113,8 @@ void backwardMonteCarlo(double *meshP0, double *meshP1, double *Xs, double *Vs, 
         // no MPI version
         // memcpy(meshP0, meshP1, sizeof(double)*Nm2);
     } 
+
+    free(meshP1);
 }
 
 /** Perform a forward monte carlo computation
