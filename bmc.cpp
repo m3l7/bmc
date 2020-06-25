@@ -281,7 +281,7 @@ bool trajectoryHitTarget(double x0, double v0, double x1, double v1, double *Xs,
 
         if (doIntersect(p0, p1, t0, t1)) {
             // check if the trajectory is entering or exiting the target domain
-            if (((p1.x - p0.x) * (t1.v - t0.v) - (p1.v - p0.v) * (t1.x - t0.x)) >= 0) {
+            if (((p1.x - p0.x) * (t1.v - t0.v) - (p1.v - p0.v) * (t1.x - t0.x)) <= 0) {
                 // exiting
                 return true;
             }
