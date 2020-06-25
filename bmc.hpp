@@ -28,7 +28,7 @@ struct Point
 int main(int argc,char **argv);
 void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double *Vs, Segment *targetSegments, int nTargetSegments, HermiteParams hermiteParams, int mpiID, int mpiNP);
 double particlePhiContribution(double *meshP0,double x,double v,double *Xs,double *Vs);
-void particleStepForward(double x0,double v0,double *x,double *v);
+void particleStepForward(double x0,double v0,double xi, double *x,double *v);
 void initMeshProbabilities(double *meshP,double *Xs,double *Vs);
 bool trajectoryHitTarget(double x0,double v0,double x1,double v1,double *Xs,double *Vs,Segment *targetSegments,int nTargetSegments);
 bool vertexOutsideBoundaries(int i,double *Xs,double *Vs);
