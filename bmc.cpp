@@ -477,26 +477,26 @@ void computeMeshProbabilities(double *meshP0, double *meshP1, double *Xs, double
     #pragma omp parallel for schedule(static, 1)
     for(int i=mpiID*Nm2/mpiNP; i<(mpiID+1)*Nm2/mpiNP; ++i) {
 
+        meshP1[i] = 0;
+        double x1, v1;
+        int ix = i%Nm, iv = i/Nm;
+
         if (vertexInTargetDomain(i, Xs, Vs)) {
             // particle already in target space Omega, set phi to 1
             meshP1[i] = 1;
             continue;
         } else if (vertexOutsideBoundaries(i, Xs, Vs)) {
             // particle outside of the boundaries or lies on the boundary (but not in the target domain)
-            meshP1[i] = 0;
             continue;
         }
 
-        double x1, v1;
-        meshP1[i] = 0;
-
         for (int j = 0; j < NHermite; ++j) {
-            particleStepForward(Xs[i%Nm], Vs[i/Nm], hermiteParams.knots[j], &x1, &v1);
+            particleStepForward(Xs[ix], Vs[iv], hermiteParams.knots[j], &x1, &v1);
 
             if (coordinatesOutsideBoundaries(x1, v1)) {
                 // the particle is outside the boundary
                 // check if it hit the target domain or not
-                if (trajectoryHitTarget(Xs[i%Nm], Vs[i/Nm], x1, v1, Xs, Vs, targetSegments, nTargetSegments)) {
+                if (trajectoryHitTarget(Xs[ix], Vs[iv], x1, v1, Xs, Vs, targetSegments, nTargetSegments)) {
                     meshP1[i] += hermiteParams.weights[j];
                 }
             } else {
