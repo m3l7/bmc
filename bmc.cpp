@@ -27,11 +27,15 @@ int main(int argc, char **argv) {
     FILE *out = fopen("out.txt", "w");
     fprintf(out, "\n");
 
-    int mpierr = MPI_Init(&argc, &argv);
+    #ifdef ENABLEMPI
+        int mpierr = MPI_Init(&argc, &argv);
+    #endif
     int mpiID = 0, mpiNP = 1;
 
-    mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
-    mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
+    #ifdef ENABLEMPI
+        mpierr = MPI_Comm_rank(MPI_COMM_WORLD, &mpiID);
+        mpierr = MPI_Comm_size(MPI_COMM_WORLD, &mpiNP);
+    #endif
 
     // init linspaces and probability mesh
     // we only need to store the probabilities for 2 consecutive time steps
@@ -49,7 +53,9 @@ int main(int argc, char **argv) {
     cgqf(NHermite, 6, 0, 0, 0, 0.5, hermiteK, hermiteW);
     struct HermiteParams hermiteParams = {.knots=hermiteK, .weights=hermiteW, .order=NHermite};
 
-    MPI_Barrier(MPI_COMM_WORLD);
+    #ifdef ENABLEMPI
+        MPI_Barrier(MPI_COMM_WORLD);
+    #endif
 
     // decide whether to use backward or forward
     if (UseForwardMonteCarlo) {
@@ -76,7 +82,9 @@ int main(int argc, char **argv) {
 	free(Xs);
 	free(Vs);
 
-    mpierr = MPI_Finalize();
+    #ifdef ENABLEMPI
+        mpierr = MPI_Finalize();
+    #endif
 
     return 0;
 }
@@ -108,10 +116,14 @@ void backwardMonteCarlo(double *meshP0, double *Xs, double *Vs, int nTargetSegme
         computeMeshProbabilities(meshP0, meshP1, Xs, Vs, targetSegments, nTargetSegments, hermiteParams, mpiID, mpiNP);
 
         // sync & shift meshes
-        MPI_Allgather(&meshP1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, meshP0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+        #ifdef ENABLEMPI
+            MPI_Allgather(&meshP1[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, meshP0, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+        #endif
 
         // no MPI version
-        // memcpy(meshP0, meshP1, sizeof(double)*Nm2);
+        #ifndef ENABLEMPI
+            memcpy(meshP0, meshP1, sizeof(double)*Nm2);
+        #endif
     } 
 
     free(meshP1);
@@ -169,7 +181,9 @@ void forwardMonteCarlo(double *meshP, double *Xs, double *Vs, int nTargetSegment
         meshP[i] /= ForwardMCsteps;
     }
 
-    MPI_Allgather(&meshP[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, meshP, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+    #ifdef ENABLEMPI
+        MPI_Allgather(&meshP[mpiID*Nm2/mpiNP], Nm2/mpiNP, MPI_DOUBLE, meshP, Nm2/mpiNP, MPI_DOUBLE, MPI_COMM_WORLD);
+    #endif
 }
 
 // Given three colinear points p, q, r, the function checks if 

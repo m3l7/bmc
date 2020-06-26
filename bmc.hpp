@@ -1,9 +1,11 @@
 #ifndef BMC_HPP
 
+#ifdef ENABLEMPI
+    #include <mpi.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <mpi.h>
 #include <math.h>
 #include <stdbool.h>
 #include <omp.h>
