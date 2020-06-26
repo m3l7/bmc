@@ -6,11 +6,13 @@ A forward Monte Carlo scheme is included for benchmark
 ## Compile
 
 `make clean && make`
+
 `make clean && ENABLEMPI=1 make` (MPI)
 
 ## Run
 
 `./bmc`
+
 `mpiexec -n 2 bmc` (MPI)
 
 The output of the last timestep is stored in `out.txt`, with format:
