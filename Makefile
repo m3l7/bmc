@@ -17,6 +17,9 @@ endif
 bmc: bmc.o hermite_rule.o
 	$(info Using compiler ${CC})
 	$(CC) $(CFLAGS) -o bmc $(OBJ)
+bmc5d: bmc5d.o hermite_rule.o
+	$(info Using compiler ${CC})
+	$(CC) $(CFLAGS) -o bmc5d bmc5d.o hermite_rule.o
 
 clean:
 	rm -f *.o
